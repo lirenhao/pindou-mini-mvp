@@ -1,83 +1,363 @@
-const CELL = 12;
+const { MARD_COLORS, MARD_PALETTE_NAME } = require('../../utils/mard-palette.js');
+const { buildBeadPattern, sourceCrop, coverFrame, coverPlacement, patternCanvasSize } = require('../../utils/pattern.js');
+
 const MAX_DIMENSION = 100;
+
+function clampInt(value, fallback, min, max) {
+  const n = parseInt(value, 10);
+  return Number.isFinite(n) ? Math.max(min, Math.min(max, n)) : fallback;
+}
+
+function ink(r, g, b) {
+  return (0.299 * r + 0.587 * g + 0.114 * b) > 160 ? '#2A241F' : '#FFFFFF';
+}
+
+function pixelRatio() {
+  if (typeof wx.getWindowInfo === 'function') {
+    const info = wx.getWindowInfo();
+    if (info && info.pixelRatio) return info.pixelRatio;
+  }
+  return 2;
+}
+
+function drawPattern(ctx, spec, gridWidth, gridHeight, result) {
+  const canvasW = spec.canvasW;
+  const canvasH = spec.canvasH;
+  const patternW = spec.patternW;
+  const patternH = spec.patternH;
+  const headerH = spec.headerH;
+  const cell = spec.cell;
+  const originX = Math.round((canvasW - patternW) / 2);
+
+  ctx.fillStyle = '#FFFAF5';
+  ctx.fillRect(0, 0, canvasW, canvasH);
+  ctx.fillStyle = '#FFFFFF';
+  ctx.fillRect(originX, headerH, patternW, patternH);
+
+  ctx.fillStyle = '#2E2925';
+  ctx.font = 'bold 16px sans-serif';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(
+    gridWidth + '×' + gridHeight + '  ·  ' + result.totalBeads + ' 颗  ·  ' + MARD_PALETTE_NAME,
+    12,
+    headerH / 2
+  );
+
+  result.cells.forEach((colorIndex, idx) => {
+    const x = idx % gridWidth;
+    const y = Math.floor(idx / gridWidth);
+    const px = originX + x * cell;
+    const py = headerH + y * cell;
+    if (!colorIndex) {
+      ctx.fillStyle = '#E7E0D8';
+      ctx.fillRect(px, py, cell, cell);
+      return;
+    }
+    ctx.fillStyle = result.palette[colorIndex - 1].hex;
+    ctx.fillRect(px, py, cell, cell);
+  });
+
+  ctx.strokeStyle = 'rgba(45, 39, 35, 0.35)';
+  ctx.lineWidth = 0.6;
+  ctx.beginPath();
+  for (let x = 0; x <= gridWidth; x++) {
+    const lineX = originX + x * cell + 0.3;
+    ctx.moveTo(lineX, headerH);
+    ctx.lineTo(lineX, headerH + patternH);
+  }
+  for (let y = 0; y <= gridHeight; y++) {
+    const lineY = headerH + y * cell + 0.3;
+    ctx.moveTo(originX, lineY);
+    ctx.lineTo(originX + patternW, lineY);
+  }
+  ctx.stroke();
+
+  const fontSize = cell >= 24 ? 12 : (cell >= 18 ? 10 : 8);
+  ctx.font = 'bold ' + fontSize + 'px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  result.cells.forEach((colorIndex, idx) => {
+    if (!colorIndex) return;
+    const color = result.palette[colorIndex - 1];
+    const x = idx % gridWidth;
+    const y = Math.floor(idx / gridWidth);
+    const cx = originX + x * cell + cell / 2;
+    const cy = headerH + y * cell + cell / 2;
+    const textColor = ink(color.r, color.g, color.b);
+    ctx.fillStyle = textColor;
+    if (cell >= 22) {
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = textColor === '#FFFFFF' ? 'rgba(0,0,0,0.35)' : 'rgba(255,255,255,0.55)';
+      ctx.strokeText(String(colorIndex), cx, cy);
+    }
+    ctx.fillText(String(colorIndex), cx, cy);
+  });
+
+  const legendTop = headerH + patternH;
+  ctx.fillStyle = '#8B8179';
+  ctx.font = '12px sans-serif';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('数字对应 MARD 色号，留空不计入。请以实物色卡核对。', 12, legendTop + 14);
+
+  const itemW = canvasW / spec.cols;
+  result.palette.forEach((color, i) => {
+    const col = i % spec.cols;
+    const row = Math.floor(i / spec.cols);
+    const x = col * itemW + 12;
+    const y = legendTop + spec.legendTitleH + row * spec.rowH;
+    ctx.fillStyle = color.hex;
+    ctx.fillRect(x, y, 22, 22);
+    ctx.strokeStyle = 'rgba(0,0,0,0.12)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x + 0.5, y + 0.5, 22, 22);
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#2E2925';
+    ctx.font = 'bold 13px sans-serif';
+    ctx.fillText(color.index + '  ' + color.code, x + 30, y + 11);
+    ctx.textAlign = 'right';
+    ctx.fillStyle = '#8B8179';
+    ctx.font = '12px sans-serif';
+    ctx.fillText(color.count + ' 颗', x + itemW - 20, y + 11);
+  });
+}
 
 Page({
   data: {
     imagePath: '',
+    imageWidth: 0,
+    imageHeight: 0,
+    stageWidth: 0,
+    panX: 0.5,
+    panY: 0.5,
+    zoom: 1,
+    zoomText: '1.0',
+    cropFrameW: 0,
+    cropFrameH: 0,
+    cropImgW: 0,
+    cropImgH: 0,
+    cropLeft: 0,
+    cropTop: 0,
     gridWidth: '29',
     gridHeight: '29',
     colorLimit: '12',
+    dither: true,
     generating: false,
     exporting: false,
     patternReady: false,
+    patternStale: false,
     patternPath: '',
+    patternDisplayWidth: 0,
     palette: [],
-    totalBeads: 0
+    totalBeads: 0,
+    emptyCount: 0,
+    showPrivacy: false
   },
 
-  onWidthInput(e) { this.setData({ gridWidth: e.detail.value }); },
-  onHeightInput(e) { this.setData({ gridHeight: e.detail.value }); },
-  onColorInput(e) { this.setData({ colorLimit: e.detail.value }); },
+  onWidthInput(e) {
+    const value = e.detail.value;
+    this.updateParam({ gridWidth: value }, () => {
+      const n = parseInt(value, 10);
+      if (n >= 5 && n <= MAX_DIMENSION) this.layoutCrop();
+    });
+  },
+
+  onHeightInput(e) {
+    const value = e.detail.value;
+    this.updateParam({ gridHeight: value }, () => {
+      const n = parseInt(value, 10);
+      if (n >= 5 && n <= MAX_DIMENSION) this.layoutCrop();
+    });
+  },
+
+  onColorInput(e) {
+    this.updateParam({ colorLimit: e.detail.value });
+  },
+
+  onDitherChange(e) {
+    this.updateParam({ dither: !!e.detail.value });
+  },
+
+  onZoomChanging(e) {
+    const zoom = Math.max(1, Math.min(3, Number(e.detail.value) || 1));
+    this.updateParam({ zoom, zoomText: zoom.toFixed(1) }, () => this.layoutCrop());
+  },
+
+  updateParam(patch, done) {
+    if (this.data.patternReady) patch.patternStale = true;
+    this.setData(patch, done);
+  },
+
+  resetCrop() {
+    this.updateParam({ panX: 0.5, panY: 0.5, zoom: 1, zoomText: '1.0' }, () => this.layoutCrop());
+  },
 
   chooseImage() {
+    this.ensurePrivacy()
+      .then(() => this.pickImage())
+      .catch(() => {
+        wx.showToast({ title: '需同意隐私指引后才能继续', icon: 'none' });
+      });
+  },
+
+  pickImage() {
+    const page = this;
     wx.chooseMedia({
       count: 1,
       mediaType: ['image'],
       sourceType: ['album', 'camera'],
       sizeType: ['compressed'],
-      success: (res) => {
+      success(res) {
         const file = res.tempFiles && res.tempFiles[0];
         if (!file || !file.tempFilePath) return;
-        this.setData({
-          imagePath: file.tempFilePath,
-          patternReady: false,
-          patternPath: '',
-          palette: [],
-          totalBeads: 0
+        wx.getImageInfo({
+          src: file.tempFilePath,
+          success(info) {
+            page.setData({
+              imagePath: file.tempFilePath,
+              imageWidth: info.width,
+              imageHeight: info.height,
+              panX: 0.5,
+              panY: 0.5,
+              zoom: 1,
+              zoomText: '1.0',
+              patternReady: false,
+              patternStale: false,
+              patternPath: '',
+              palette: [],
+              totalBeads: 0,
+              emptyCount: 0
+            }, () => page.measureCrop());
+          },
+          fail() {
+            wx.showToast({ title: '未能读取图片', icon: 'none' });
+          }
         });
       },
-      fail: (err) => {
-        if (err && err.errMsg && !err.errMsg.includes('cancel')) {
-          wx.showToast({ title: '未能选择图片', icon: 'none' });
+      fail(err) {
+        const msg = (err && err.errMsg) || '';
+        if (msg.indexOf('cancel') >= 0) return;
+        if (msg.indexOf('privacy') >= 0) {
+          wx.showToast({ title: '请先同意隐私指引，或在后台完成配置', icon: 'none' });
+          return;
         }
+        wx.showToast({ title: '未能选择图片', icon: 'none' });
       }
     });
   },
 
-  clampInt(value, fallback, min, max) {
-    const n = parseInt(value, 10);
-    return Number.isFinite(n) ? Math.max(min, Math.min(max, n)) : fallback;
+  measureCrop() {
+    const page = this;
+    wx.nextTick(() => {
+      wx.createSelectorQuery().in(page).select('.crop-stage').boundingClientRect((rect) => {
+        if (!rect || !rect.width) return;
+        page.setData({ stageWidth: rect.width }, () => page.layoutCrop());
+      }).exec();
+    });
+  },
+
+  layoutCrop() {
+    const imageWidth = this.data.imageWidth;
+    const imageHeight = this.data.imageHeight;
+    const stageWidth = this.data.stageWidth;
+    if (!imageWidth || !imageHeight || !stageWidth) return;
+    const gridWidth = clampInt(this.data.gridWidth, 29, 5, MAX_DIMENSION);
+    const gridHeight = clampInt(this.data.gridHeight, 29, 5, MAX_DIMENSION);
+    const frame = coverFrame(stageWidth, gridWidth, gridHeight);
+    const placed = coverPlacement(
+      imageWidth,
+      imageHeight,
+      frame.frameW,
+      frame.frameH,
+      this.data.zoom,
+      this.data.panX,
+      this.data.panY
+    );
+    this.setData({
+      cropFrameW: frame.frameW,
+      cropFrameH: frame.frameH,
+      cropImgW: placed.imgW,
+      cropImgH: placed.imgH,
+      cropLeft: placed.left,
+      cropTop: placed.top
+    });
+  },
+
+  onCropStart(e) {
+    const touch = e.touches && e.touches[0];
+    if (!touch) return;
+    this._drag = {
+      x: touch.clientX,
+      y: touch.clientY,
+      panX: this.data.panX,
+      panY: this.data.panY
+    };
+  },
+
+  onCropMove(e) {
+    if (!this._drag) return;
+    const touch = e.touches && e.touches[0];
+    if (!touch) return;
+    const roomX = this.data.cropImgW - this.data.cropFrameW;
+    const roomY = this.data.cropImgH - this.data.cropFrameH;
+    let panX = this._drag.panX;
+    let panY = this._drag.panY;
+    if (roomX > 1) panX -= (touch.clientX - this._drag.x) / roomX;
+    if (roomY > 1) panY -= (touch.clientY - this._drag.y) / roomY;
+    panX = Math.max(0, Math.min(1, panX));
+    panY = Math.max(0, Math.min(1, panY));
+    const patch = {
+      panX,
+      panY,
+      cropLeft: -panX * Math.max(0, roomX),
+      cropTop: -panY * Math.max(0, roomY)
+    };
+    if (this.data.patternReady) patch.patternStale = true;
+    this.setData(patch);
+  },
+
+  onCropEnd() {
+    this._drag = null;
   },
 
   async generatePattern() {
-    if (!this.data.imagePath) {
+    if (!this.data.imagePath || !this.data.imageWidth || !this.data.imageHeight) {
       wx.showToast({ title: '请先选择一张图片', icon: 'none' });
       return;
     }
-    const width = this.clampInt(this.data.gridWidth, 29, 5, MAX_DIMENSION);
-    const height = this.clampInt(this.data.gridHeight, 29, 5, MAX_DIMENSION);
-    const colorLimit = this.clampInt(this.data.colorLimit, 12, 2, 32);
+    const width = clampInt(this.data.gridWidth, 29, 5, MAX_DIMENSION);
+    const height = clampInt(this.data.gridHeight, 29, 5, MAX_DIMENSION);
+    const colorLimit = clampInt(this.data.colorLimit, 12, 2, 32);
     this.setData({
       gridWidth: String(width),
       gridHeight: String(height),
       colorLimit: String(colorLimit),
       generating: true
     });
+    if (this.data.stageWidth) this.layoutCrop();
 
     try {
       const result = await this.processImage(width, height, colorLimit);
       this.setData({
         patternPath: result.path,
+        patternDisplayWidth: result.displayWidth,
         palette: result.palette,
-        totalBeads: width * height,
-        patternReady: true
+        totalBeads: result.totalBeads,
+        emptyCount: result.emptyCount,
+        patternReady: true,
+        patternStale: false
       });
       wx.showToast({ title: '图纸生成成功', icon: 'success' });
     } catch (err) {
       console.error('生成图纸失败', err);
+      const empty = err && err.message === 'EMPTY_IMAGE';
       wx.showModal({
         title: '生成失败',
-        content: '请重新选择图片后再试。如果持续失败，请在微信开发者工具中检查 Canvas 相关错误。',
+        content: empty
+          ? '这张图片几乎是全透明的，没有可以转成豆子的内容。'
+          : '请重新选择图片后再试。如果持续失败，请在微信开发者工具中检查 Canvas 相关错误。',
         showCancel: false
       });
     } finally {
@@ -86,177 +366,166 @@ Page({
   },
 
   processImage(width, height, colorLimit) {
+    const page = this;
+    const crop = sourceCrop(
+      page.data.imageWidth,
+      page.data.imageHeight,
+      width,
+      height,
+      page.data.zoom,
+      page.data.panX,
+      page.data.panY
+    );
     return new Promise((resolve, reject) => {
-      const query = wx.createSelectorQuery().in(this);
-      query.select('#workCanvas').fields({ node: true, size: true }).exec((res) => {
+      wx.createSelectorQuery().in(page).select('#workCanvas').fields({ node: true, size: true }).exec((res) => {
         try {
           const info = res && res[0];
           if (!info || !info.node) throw new Error('Canvas 2D 节点不可用');
           const canvas = info.node;
           const ctx = canvas.getContext('2d');
-          const dpr = wx.getSystemInfoSync().pixelRatio || 1;
-
-          // 以图纸格数为像素尺寸采样；用 cover 居中裁剪，填满图纸。
           canvas.width = width;
           canvas.height = height;
           const img = canvas.createImage();
           img.onload = () => {
             try {
               ctx.clearRect(0, 0, width, height);
-              const scale = Math.max(width / img.width, height / img.height);
-              const sw = width / scale;
-              const sh = height / scale;
-              const sx = (img.width - sw) / 2;
-              const sy = (img.height - sh) / 2;
-              ctx.drawImage(img, sx, sy, sw, sh, 0, 0, width, height);
+              ctx.drawImage(img, crop.sx, crop.sy, crop.sw, crop.sh, 0, 0, width, height);
               const imageData = ctx.getImageData(0, 0, width, height).data;
               const pixels = [];
               for (let i = 0; i < imageData.length; i += 4) {
-                pixels.push([imageData[i], imageData[i + 1], imageData[i + 2]]);
+                if (imageData[i + 3] < 128) pixels.push(null);
+                else pixels.push([imageData[i], imageData[i + 1], imageData[i + 2]]);
               }
-              const quantized = this.quantizeColors(pixels, colorLimit);
-              const colorMap = new Map();
-              quantized.pixels.forEach((rgb) => {
-                const hex = this.rgbToHex(rgb);
-                const prev = colorMap.get(hex) || { r: rgb[0], g: rgb[1], b: rgb[2], hex, count: 0 };
-                prev.count += 1;
-                colorMap.set(hex, prev);
+              const result = buildBeadPattern({
+                pixels,
+                width,
+                height,
+                colorLimit,
+                dither: !!page.data.dither,
+                brandColors: MARD_COLORS
               });
-              const palette = Array.from(colorMap.values()).sort((a, b) => b.count - a.count);
-              const lookup = new Map(palette.map((p, i) => [p.hex, i + 1]));
-
-              // 输出图纸：每格放大为 CELL×CELL，并绘制细网格。
-              const out = canvas;
-              out.width = width * CELL;
-              out.height = height * CELL;
-              const outCtx = out.getContext('2d');
-              outCtx.fillStyle = '#ffffff';
-              outCtx.fillRect(0, 0, out.width, out.height);
-              quantized.pixels.forEach((rgb, idx) => {
-                const x = idx % width;
-                const y = Math.floor(idx / width);
-                outCtx.fillStyle = this.rgbToHex(rgb);
-                outCtx.fillRect(x * CELL, y * CELL, CELL, CELL);
-              });
-              outCtx.strokeStyle = 'rgba(45, 39, 35, 0.35)';
-              outCtx.lineWidth = 0.6;
-              outCtx.beginPath();
-              for (let x = 0; x <= width; x++) {
-                outCtx.moveTo(x * CELL + 0.3, 0);
-                outCtx.lineTo(x * CELL + 0.3, out.height);
-              }
-              for (let y = 0; y <= height; y++) {
-                outCtx.moveTo(0, y * CELL + 0.3);
-                outCtx.lineTo(out.width, y * CELL + 0.3);
-              }
-              outCtx.stroke();
-
-              // 为了让颜色编号可读，MVP 将颜色编号作为清单；图纸格内不叠加数字。
+              const spec = patternCanvasSize(width, height, result.palette.length);
+              canvas.width = spec.canvasW;
+              canvas.height = spec.canvasH;
+              const outCtx = canvas.getContext('2d');
+              drawPattern(outCtx, spec, width, height, result);
+              const ratio = Math.max(1, Math.min(2, pixelRatio()));
+              const exportScale = Math.min(ratio, 4096 / spec.canvasW, 4096 / spec.canvasH);
               wx.canvasToTempFilePath({
-                canvas: out,
-                x: 0, y: 0, width: out.width, height: out.height,
-                destWidth: out.width * Math.max(1, Math.min(2, dpr)),
-                destHeight: out.height * Math.max(1, Math.min(2, dpr)),
+                canvas,
+                x: 0,
+                y: 0,
+                width: spec.canvasW,
+                height: spec.canvasH,
+                destWidth: Math.round(spec.canvasW * exportScale),
+                destHeight: Math.round(spec.canvasH * exportScale),
                 fileType: 'png',
-                success: (fileRes) => resolve({ path: fileRes.tempFilePath, palette }),
+                success: (fileRes) => resolve({
+                  path: fileRes.tempFilePath,
+                  palette: result.palette,
+                  totalBeads: result.totalBeads,
+                  emptyCount: result.emptyCount,
+                  displayWidth: spec.canvasW
+                }),
                 fail: reject
-              }, this);
-            } catch (e) { reject(e); }
+              }, page);
+            } catch (e) {
+              reject(e);
+            }
           };
           img.onerror = () => reject(new Error('图片加载失败'));
-          img.src = this.data.imagePath;
-        } catch (e) { reject(e); }
+          img.src = page.data.imagePath;
+        } catch (e) {
+          reject(e);
+        }
       });
     });
-  },
-
-  quantizeColors(pixels, k) {
-    // 确定性、轻量级 k-means：适用于 MVP 的小尺寸图纸。
-    const unique = [];
-    const seen = new Set();
-    pixels.forEach(p => {
-      const key = p.join(',');
-      if (!seen.has(key)) { seen.add(key); unique.push(p); }
-    });
-    if (unique.length <= k) return { pixels: pixels.map(p => p.slice()) };
-
-    const centers = [];
-    // 使用最远点初始化，尽量让初始中心分散。
-    centers.push(unique[0].slice());
-    while (centers.length < Math.min(k, unique.length)) {
-      let best = null, bestDist = -1;
-      unique.forEach(p => {
-        let nearest = Infinity;
-        centers.forEach(c => {
-          const d = this.colorDistanceSq(p, c);
-          if (d < nearest) nearest = d;
-        });
-        if (nearest > bestDist) { bestDist = nearest; best = p; }
-      });
-      centers.push(best.slice());
-    }
-
-    let assignments = new Array(pixels.length).fill(0);
-    for (let iter = 0; iter < 8; iter++) {
-      const sums = centers.map(() => [0, 0, 0, 0]);
-      pixels.forEach((p, i) => {
-        let best = 0, dist = Infinity;
-        centers.forEach((c, j) => {
-          const d = this.colorDistanceSq(p, c);
-          if (d < dist) { dist = d; best = j; }
-        });
-        assignments[i] = best;
-        sums[best][0] += p[0]; sums[best][1] += p[1]; sums[best][2] += p[2]; sums[best][3]++;
-      });
-      sums.forEach((s, i) => {
-        if (s[3]) centers[i] = [Math.round(s[0] / s[3]), Math.round(s[1] / s[3]), Math.round(s[2] / s[3])];
-      });
-    }
-    const finalPixels = pixels.map(p => {
-      let best = centers[0], dist = Infinity;
-      centers.forEach(c => {
-        const d = this.colorDistanceSq(p, c);
-        if (d < dist) { dist = d; best = c; }
-      });
-      return best.slice();
-    });
-    return { pixels: finalPixels };
-  },
-
-  colorDistanceSq(a, b) {
-    const dr = a[0] - b[0], dg = a[1] - b[1], db = a[2] - b[2];
-    // 加权 RGB 距离，比纯欧氏距离更照顾绿色通道。
-    return 0.299 * dr * dr + 0.587 * dg * dg + 0.114 * db * db;
-  },
-
-  rgbToHex(rgb) {
-    return '#' + rgb.map(v => Math.max(0, Math.min(255, v)).toString(16).padStart(2, '0')).join('').toUpperCase();
   },
 
   savePattern() {
-    if (!this.data.patternPath) return;
+    if (!this.data.patternPath || this.data.exporting) return;
+    this.ensurePrivacy()
+      .then(() => this.writeAlbum())
+      .catch(() => {
+        wx.showToast({ title: '需同意隐私指引后才能保存', icon: 'none' });
+      });
+  },
+
+  writeAlbum() {
     this.setData({ exporting: true });
     wx.saveImageToPhotosAlbum({
       filePath: this.data.patternPath,
       success: () => wx.showToast({ title: '已保存到相册', icon: 'success' }),
       fail: (err) => {
-        if (err && (err.errMsg || '').includes('auth deny')) {
+        const msg = (err && err.errMsg) || '';
+        if (msg.indexOf('privacy') >= 0) {
+          wx.showToast({ title: '需同意隐私指引后才能保存', icon: 'none' });
+          return;
+        }
+        if (msg.indexOf('auth deny') >= 0 || msg.indexOf('auth denied') >= 0) {
           wx.showModal({
             title: '需要相册权限',
             content: '请在设置中允许保存图片到相册。',
             confirmText: '去设置',
             success: (r) => { if (r.confirm) wx.openSetting({}); }
           });
-        } else {
-          // 模拟器或开发工具不支持保存时，仍可在预览图上长按保存。
-          wx.showModal({
-            title: '无法直接保存',
-            content: '可长按图纸预览图片，选择保存图片。真机使用时请检查相册权限。',
-            showCancel: false
-          });
+          return;
         }
+        wx.showModal({
+          title: '无法直接保存',
+          content: '可长按图纸预览图片，选择保存图片。真机使用时请检查相册权限。',
+          showCancel: false
+        });
       },
       complete: () => this.setData({ exporting: false })
+    });
+  },
+
+  openPrivacyPopup(resolve) {
+    if (this._privacyResolve) {
+      resolve({ event: 'disagree' });
+      return;
+    }
+    this._privacyResolve = resolve;
+    this.setData({ showPrivacy: true });
+  },
+
+  handleAgreePrivacyAuthorization() {
+    const resolve = this._privacyResolve;
+    this._privacyResolve = null;
+    this.setData({ showPrivacy: false });
+    if (typeof resolve === 'function') {
+      resolve({ buttonId: 'agree-btn', event: 'agree' });
+    }
+  },
+
+  handleDisagreePrivacy() {
+    const resolve = this._privacyResolve;
+    this._privacyResolve = null;
+    this.setData({ showPrivacy: false });
+    if (typeof resolve === 'function') resolve({ event: 'disagree' });
+  },
+
+  handleOpenPrivacyContract() {
+    if (typeof wx.openPrivacyContract !== 'function') {
+      wx.showToast({ title: '当前基础库无法打开隐私指引', icon: 'none' });
+      return;
+    }
+    wx.openPrivacyContract({
+      fail: () => wx.showToast({ title: '请先在小程序后台配置隐私保护指引', icon: 'none' })
+    });
+  },
+
+  ensurePrivacy() {
+    return new Promise((resolve, reject) => {
+      if (typeof wx.requirePrivacyAuthorize !== 'function') {
+        resolve();
+        return;
+      }
+      wx.requirePrivacyAuthorize({
+        success: () => resolve(),
+        fail: () => reject(new Error('PRIVACY_DECLINED'))
+      });
     });
   }
 });

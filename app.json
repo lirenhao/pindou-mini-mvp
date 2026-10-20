@@ -8,6 +8,12 @@
     "navigationBarTextStyle": "black",
     "backgroundColor": "#fffaf5"
   },
+  "__usePrivacyCheck__": true,
+  "permission": {
+    "scope.writePhotosAlbum": {
+      "desc": "用于把拼豆图纸保存到相册"
+    }
+  },
   "style": "v2",
   "sitemapLocation": "sitemap.json"
 }

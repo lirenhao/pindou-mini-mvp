@@ -2,13 +2,47 @@
   <view class="hero">
     <view class="eyebrow">PIXEL BEAD PATTERN</view>
     <view class="title">图片转拼豆图纸</view>
-    <view class="subtitle">上传图片，生成网格图纸和颜色用量清单</view>
+    <view class="subtitle">上传图片，生成带色号的网格图纸和 MARD 用量清单</view>
   </view>
 
   <view class="panel">
     <view class="section-title">① 选择图片</view>
     <button class="primary" bindtap="chooseImage">{{imagePath ? '重新选择图片' : '从相册选择图片'}}</button>
-    <image wx:if="{{imagePath}}" class="source-image" src="{{imagePath}}" mode="aspectFit" />
+    <block wx:if="{{imagePath}}">
+      <view class="crop-stage">
+        <view
+          wx:if="{{cropFrameW}}"
+          class="crop-frame"
+          style="width: {{cropFrameW}}px; height: {{cropFrameH}}px;"
+          catchtouchstart="onCropStart"
+          catchtouchmove="onCropMove"
+          catchtouchend="onCropEnd"
+          catchtouchcancel="onCropEnd"
+        >
+          <image
+            class="crop-image"
+            src="{{imagePath}}"
+            mode="scaleToFill"
+            style="width: {{cropImgW}}px; height: {{cropImgH}}px; left: {{cropLeft}}px; top: {{cropTop}}px;"
+          />
+        </view>
+      </view>
+      <view class="slider-label">
+        <text>放大 {{zoomText}}</text>
+        <text class="reset" bindtap="resetCrop">复位</text>
+      </view>
+      <slider
+        min="1"
+        max="3"
+        step="0.1"
+        value="{{zoom}}"
+        activeColor="#d96f4a"
+        backgroundColor="#f0e6de"
+        block-size="20"
+        bindchange="onZoomChanging"
+      />
+      <view class="hint">框内是实际入图范围。拖动调整位置，滑杆放大。宽高比跟图纸格子一致。</view>
+    </block>
     <view wx:else class="empty-image"><text class="empty-icon">＋</text><text>选择一张清晰、主体明显的图片</text></view>
   </view>
 
@@ -28,7 +62,14 @@
         <input type="number" value="{{colorLimit}}" bindinput="onColorInput" />
       </view>
     </view>
-    <view class="hint">建议从 29×29 或 50×50 格开始；颜色数量建议 8–16 色。</view>
+    <view class="switch-row">
+      <view>
+        <text class="switch-label">渐变抖动</text>
+        <text class="switch-note">更接近原图；关闭后色块更整齐</text>
+      </view>
+      <switch checked="{{dither}}" color="#d96f4a" bindchange="onDitherChange" />
+    </view>
+    <view class="hint">建议从 29×29 或 50×50 格开始，颜色 8–16 种。色号按 MARD 291 参考色就近匹配。</view>
     <button class="primary generate" bindtap="generatePattern" loading="{{generating}}" disabled="{{!imagePath || generating}}">生成拼豆图纸</button>
   </view>
 
@@ -39,23 +80,42 @@
       <view><text class="metric">{{totalBeads}}</text><text class="metric-label">豆子总数</text></view>
       <view><text class="metric">{{palette.length}}</text><text class="metric-label">颜色种类</text></view>
     </view>
-    <image class="pattern-image" src="{{patternPath}}" mode="widthFix" show-menu-by-longpress="true" />
-    <view class="hint">预览包含网格线。格子较小时，建议导出 PNG 后放大查看。</view>
+    <view wx:if="{{emptyCount}}" class="hint">透明区域留空 {{emptyCount}} 格，不计入豆子。</view>
+    <view wx:if="{{patternStale}}" class="hint warn">裁切或参数已变更，重新生成后才会更新图纸。</view>
+    <scroll-view class="pattern-scroll" scroll-x scroll-y enhanced show-scrollbar>
+      <view style="width: {{patternDisplayWidth}}px;">
+        <image class="pattern-image" src="{{patternPath}}" mode="widthFix" style="width: {{patternDisplayWidth}}px;" show-menu-by-longpress="true" />
+      </view>
+    </scroll-view>
+    <view class="hint">格子里的数字对应下方编号。预览可滑动，导出的 PNG 自带色号表。</view>
     <button class="primary export" bindtap="savePattern" loading="{{exporting}}">导出 / 保存 PNG</button>
   </view>
 
   <view wx:if="{{patternReady}}" class="panel">
     <view class="section-title">④ 颜色用量清单</view>
-    <view class="color-head"><text>颜色</text><text>RGB / HEX</text><text>数量</text></view>
-    <view wx:for="{{palette}}" wx:key="hex" class="color-row">
+    <view class="color-head"><text class="head-index">编号</text><text class="head-code">MARD 色号</text><text class="head-count">数量</text></view>
+    <view wx:for="{{palette}}" wx:key="code" class="color-row">
+      <text class="index">{{item.index}}</text>
       <view class="swatch" style="background: {{item.hex}}"></view>
-      <view class="color-info"><text class="hex">{{item.hex}}</text><text class="rgb">RGB({{item.r}}, {{item.g}}, {{item.b}})</text></view>
+      <view class="color-info"><text class="hex">{{item.code}}</text><text class="rgb">{{item.hex}} · RGB({{item.r}}, {{item.g}}, {{item.b}})</text></view>
       <text class="count">{{item.count}} 颗</text>
     </view>
+    <view class="hint">色值是屏幕参考色。买豆时用 MARD 色号对照实物色卡。</view>
   </view>
 
-  <view class="footer">本地处理 · 自定义 RGB 色彩 · 不上传图片</view>
+  <view class="footer">本地处理 · MARD 291 参考色 · 不上传图片</view>
 
-  <!-- 隐藏的离屏 Canvas：读取原图像素并绘制图纸 -->
   <canvas type="2d" id="workCanvas" class="hidden-canvas"></canvas>
+</view>
+
+<view wx:if="{{showPrivacy}}" class="privacy-mask">
+  <view class="privacy-card">
+    <view class="privacy-title">用户隐私保护提示</view>
+    <view class="privacy-body">选择图片和保存图纸会用到相册，拍摄时还会用到摄像头。图片只在这台手机上处理，不会上传。</view>
+    <view class="privacy-link" bindtap="handleOpenPrivacyContract">查看《隐私保护指引》</view>
+    <view class="privacy-actions">
+      <button class="ghost privacy-btn" bindtap="handleDisagreePrivacy">暂不使用</button>
+      <button id="agree-btn" class="primary privacy-btn" open-type="agreePrivacyAuthorization" bindagreeprivacyauthorization="handleAgreePrivacyAuthorization">同意</button>
+    </view>
+  </view>
 </view>
