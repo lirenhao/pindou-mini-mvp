@@ -1,0 +1,61 @@
+<view class="page">
+  <view class="hero">
+    <view class="eyebrow">PIXEL BEAD PATTERN</view>
+    <view class="title">图片转拼豆图纸</view>
+    <view class="subtitle">上传图片，生成网格图纸和颜色用量清单</view>
+  </view>
+
+  <view class="panel">
+    <view class="section-title">① 选择图片</view>
+    <button class="primary" bindtap="chooseImage">{{imagePath ? '重新选择图片' : '从相册选择图片'}}</button>
+    <image wx:if="{{imagePath}}" class="source-image" src="{{imagePath}}" mode="aspectFit" />
+    <view wx:else class="empty-image"><text class="empty-icon">＋</text><text>选择一张清晰、主体明显的图片</text></view>
+  </view>
+
+  <view class="panel">
+    <view class="section-title">② 图纸参数</view>
+    <view class="field-row">
+      <view class="field">
+        <text class="label">宽度（格）</text>
+        <input type="number" value="{{gridWidth}}" bindinput="onWidthInput" />
+      </view>
+      <view class="field">
+        <text class="label">高度（格）</text>
+        <input type="number" value="{{gridHeight}}" bindinput="onHeightInput" />
+      </view>
+      <view class="field">
+        <text class="label">颜色数量</text>
+        <input type="number" value="{{colorLimit}}" bindinput="onColorInput" />
+      </view>
+    </view>
+    <view class="hint">建议从 29×29 或 50×50 格开始；颜色数量建议 8–16 色。</view>
+    <button class="primary generate" bindtap="generatePattern" loading="{{generating}}" disabled="{{!imagePath || generating}}">生成拼豆图纸</button>
+  </view>
+
+  <view wx:if="{{patternReady}}" class="panel">
+    <view class="section-title">③ 图纸预览</view>
+    <view class="summary">
+      <view><text class="metric">{{gridWidth}}×{{gridHeight}}</text><text class="metric-label">图纸尺寸</text></view>
+      <view><text class="metric">{{totalBeads}}</text><text class="metric-label">豆子总数</text></view>
+      <view><text class="metric">{{palette.length}}</text><text class="metric-label">颜色种类</text></view>
+    </view>
+    <image class="pattern-image" src="{{patternPath}}" mode="widthFix" show-menu-by-longpress="true" />
+    <view class="hint">预览包含网格线。格子较小时，建议导出 PNG 后放大查看。</view>
+    <button class="primary export" bindtap="savePattern" loading="{{exporting}}">导出 / 保存 PNG</button>
+  </view>
+
+  <view wx:if="{{patternReady}}" class="panel">
+    <view class="section-title">④ 颜色用量清单</view>
+    <view class="color-head"><text>颜色</text><text>RGB / HEX</text><text>数量</text></view>
+    <view wx:for="{{palette}}" wx:key="hex" class="color-row">
+      <view class="swatch" style="background: {{item.hex}}"></view>
+      <view class="color-info"><text class="hex">{{item.hex}}</text><text class="rgb">RGB({{item.r}}, {{item.g}}, {{item.b}})</text></view>
+      <text class="count">{{item.count}} 颗</text>
+    </view>
+  </view>
+
+  <view class="footer">本地处理 · 自定义 RGB 色彩 · 不上传图片</view>
+
+  <!-- 隐藏的离屏 Canvas：读取原图像素并绘制图纸 -->
+  <canvas type="2d" id="workCanvas" class="hidden-canvas"></canvas>
+</view>
