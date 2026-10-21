@@ -1,5 +1,5 @@
 const { MARD_COLORS, MARD_PALETTE_NAME } = require('../../utils/mard-palette.js');
-const { buildBeadPattern, sourceCrop, coverFrame, coverPlacement, patternCanvasSize } = require('../../utils/pattern.js');
+const { buildBeadPattern, sourceCrop, coverFrame, coverPlacement, patternCanvasSize, fitPreview, clampPreviewPan } = require('../../utils/pattern.js');
 
 const MAX_DIMENSION = 100;
 
@@ -12,15 +12,7 @@ function ink(r, g, b) {
   return (0.299 * r + 0.587 * g + 0.114 * b) > 160 ? '#2A241F' : '#FFFFFF';
 }
 
-function pixelRatio() {
-  if (typeof wx.getWindowInfo === 'function') {
-    const info = wx.getWindowInfo();
-    if (info && info.pixelRatio) return info.pixelRatio;
-  }
-  return 2;
-}
-
-function drawPattern(ctx, spec, gridWidth, gridHeight, result) {
+function drawPattern(ctx, spec, gridWidth, gridHeight, result, withLegend) {
   const canvasW = spec.canvasW;
   const canvasH = spec.canvasH;
   const patternW = spec.patternW;
@@ -73,6 +65,29 @@ function drawPattern(ctx, spec, gridWidth, gridHeight, result) {
   }
   ctx.stroke();
 
+  ctx.beginPath();
+  ctx.strokeStyle = 'rgba(45, 39, 35, 0.8)';
+  ctx.lineWidth = 1.6;
+  for (let x = 0; x <= gridWidth; x += 10) {
+    const lineX = originX + x * cell + 0.3;
+    ctx.moveTo(lineX, headerH);
+    ctx.lineTo(lineX, headerH + patternH);
+  }
+  if (gridWidth % 10 !== 0) {
+    ctx.moveTo(originX + patternW - 0.3, headerH);
+    ctx.lineTo(originX + patternW - 0.3, headerH + patternH);
+  }
+  for (let y = 0; y <= gridHeight; y += 10) {
+    const lineY = headerH + y * cell + 0.3;
+    ctx.moveTo(originX, lineY);
+    ctx.lineTo(originX + patternW, lineY);
+  }
+  if (gridHeight % 10 !== 0) {
+    ctx.moveTo(originX, headerH + patternH - 0.3);
+    ctx.lineTo(originX + patternW, headerH + patternH - 0.3);
+  }
+  ctx.stroke();
+
   const fontSize = cell >= 24 ? 12 : (cell >= 18 ? 10 : 8);
   ctx.font = 'bold ' + fontSize + 'px sans-serif';
   ctx.textAlign = 'center';
@@ -93,6 +108,8 @@ function drawPattern(ctx, spec, gridWidth, gridHeight, result) {
     }
     ctx.fillText(String(colorIndex), cx, cy);
   });
+
+  if (withLegend === false) return;
 
   const legendTop = headerH + patternH;
   ctx.fillStyle = '#8B8179';
@@ -149,11 +166,23 @@ Page({
     patternReady: false,
     patternStale: false,
     patternPath: '',
-    patternDisplayWidth: 0,
+    previewPath: '',
+    patternPixelW: 0,
+    patternPixelH: 0,
+    previewAreaH: 420,
+    previewBaseW: 1,
+    previewBaseH: 1,
+    previewTx: 0,
+    previewTy: 0,
+    previewScale: 1,
+    previewScaleText: '100%',
     palette: [],
     totalBeads: 0,
     emptyCount: 0,
-    showPrivacy: false
+    showPrivacy: false,
+    useCanvas: false,
+    canvasCssW: 300,
+    canvasCssH: 300
   },
 
   onWidthInput(e) {
@@ -195,11 +224,7 @@ Page({
   },
 
   chooseImage() {
-    this.ensurePrivacy()
-      .then(() => this.pickImage())
-      .catch(() => {
-        wx.showToast({ title: '需同意隐私指引后才能继续', icon: 'none' });
-      });
+    this.pickImage();
   },
 
   pickImage() {
@@ -226,6 +251,7 @@ Page({
               patternReady: false,
               patternStale: false,
               patternPath: '',
+              previewPath: '',
               palette: [],
               totalBeads: 0,
               emptyCount: 0
@@ -239,8 +265,12 @@ Page({
       fail(err) {
         const msg = (err && err.errMsg) || '';
         if (msg.indexOf('cancel') >= 0) return;
+        if ((err && err.errno === 112) || msg.indexOf('not declared') >= 0) {
+          page.showPrivacyScopeError('choose');
+          return;
+        }
         if (msg.indexOf('privacy') >= 0) {
-          wx.showToast({ title: '请先同意隐私指引，或在后台完成配置', icon: 'none' });
+          wx.showToast({ title: '需先同意隐私保护指引', icon: 'none' });
           return;
         }
         wx.showToast({ title: '未能选择图片', icon: 'none' });
@@ -342,13 +372,17 @@ Page({
       const result = await this.processImage(width, height, colorLimit);
       this.setData({
         patternPath: result.path,
-        patternDisplayWidth: result.displayWidth,
+        previewPath: result.previewPath,
+        patternPixelW: result.patternPixelW,
+        patternPixelH: result.patternPixelH,
         palette: result.palette,
         totalBeads: result.totalBeads,
         emptyCount: result.emptyCount,
         patternReady: true,
-        patternStale: false
-      });
+        patternStale: false,
+        previewScale: 1,
+        previewScaleText: '100%'
+      }, () => this.layoutPreview(0));
       wx.showToast({ title: '图纸生成成功', icon: 'success' });
     } catch (err) {
       console.error('生成图纸失败', err);
@@ -361,7 +395,7 @@ Page({
         showCancel: false
       });
     } finally {
-      this.setData({ generating: false });
+      this.setData({ generating: false, useCanvas: false });
     }
   },
 
@@ -377,78 +411,315 @@ Page({
       page.data.panY
     );
     return new Promise((resolve, reject) => {
-      wx.createSelectorQuery().in(page).select('#workCanvas').fields({ node: true, size: true }).exec((res) => {
-        try {
+      const queryCanvas = (attempt) => {
+        wx.createSelectorQuery().in(page).select('#workCanvas').fields({ node: true, size: true }).exec((res) => {
           const info = res && res[0];
-          if (!info || !info.node) throw new Error('Canvas 2D 节点不可用');
-          const canvas = info.node;
-          const ctx = canvas.getContext('2d');
-          canvas.width = width;
-          canvas.height = height;
-          const img = canvas.createImage();
-          img.onload = () => {
-            try {
-              ctx.clearRect(0, 0, width, height);
-              ctx.drawImage(img, crop.sx, crop.sy, crop.sw, crop.sh, 0, 0, width, height);
-              const imageData = ctx.getImageData(0, 0, width, height).data;
-              const pixels = [];
-              for (let i = 0; i < imageData.length; i += 4) {
-                if (imageData[i + 3] < 128) pixels.push(null);
-                else pixels.push([imageData[i], imageData[i + 1], imageData[i + 2]]);
-              }
-              const result = buildBeadPattern({
-                pixels,
-                width,
-                height,
-                colorLimit,
-                dither: !!page.data.dither,
-                brandColors: MARD_COLORS
-              });
-              const spec = patternCanvasSize(width, height, result.palette.length);
-              canvas.width = spec.canvasW;
-              canvas.height = spec.canvasH;
-              const outCtx = canvas.getContext('2d');
-              drawPattern(outCtx, spec, width, height, result);
-              const ratio = Math.max(1, Math.min(2, pixelRatio()));
-              const exportScale = Math.min(ratio, 4096 / spec.canvasW, 4096 / spec.canvasH);
-              wx.canvasToTempFilePath({
-                canvas,
-                x: 0,
-                y: 0,
-                width: spec.canvasW,
-                height: spec.canvasH,
-                destWidth: Math.round(spec.canvasW * exportScale),
-                destHeight: Math.round(spec.canvasH * exportScale),
-                fileType: 'png',
-                success: (fileRes) => resolve({
-                  path: fileRes.tempFilePath,
-                  palette: result.palette,
-                  totalBeads: result.totalBeads,
-                  emptyCount: result.emptyCount,
-                  displayWidth: spec.canvasW
-                }),
-                fail: reject
-              }, page);
-            } catch (e) {
-              reject(e);
-            }
-          };
-          img.onerror = () => reject(new Error('图片加载失败'));
-          img.src = page.data.imagePath;
+          if ((!info || !info.node) && attempt < 2) {
+            wx.nextTick(() => queryCanvas(attempt + 1));
+            return;
+          }
+          page.drawOnCanvas(info, width, height, colorLimit, crop, resolve, reject);
+        });
+      };
+      page.setData({ useCanvas: true }, () => wx.nextTick(() => queryCanvas(0)));
+    });
+  },
+
+  drawOnCanvas(info, width, height, colorLimit, crop, resolve, reject) {
+    const page = this;
+    try {
+      if (!info || !info.node) throw new Error('Canvas 2D 节点不可用');
+      const canvas = info.node;
+      const ctx = canvas.getContext('2d');
+      canvas.width = width;
+      canvas.height = height;
+      const img = canvas.createImage();
+      img.onload = () => {
+        try {
+          ctx.clearRect(0, 0, width, height);
+          ctx.drawImage(img, crop.sx, crop.sy, crop.sw, crop.sh, 0, 0, width, height);
+          const imageData = ctx.getImageData(0, 0, width, height).data;
+          const pixels = [];
+          for (let i = 0; i < imageData.length; i += 4) {
+            if (imageData[i + 3] < 128) pixels.push(null);
+            else pixels.push([imageData[i], imageData[i + 1], imageData[i + 2]]);
+          }
+          const result = buildBeadPattern({
+            pixels,
+            width,
+            height,
+            colorLimit,
+            dither: !!page.data.dither,
+            brandColors: MARD_COLORS
+          });
+          const spec = patternCanvasSize(width, height, result.palette.length);
+          page.renderAndSave(canvas, spec, width, height, result)
+            .then(resolve)
+            .catch(reject);
         } catch (e) {
           reject(e);
         }
+      };
+      img.onerror = () => reject(new Error('图片加载失败'));
+      img.src = page.data.imagePath;
+    } catch (e) {
+      reject(e);
+    }
+  },
+
+  renderAndSave(canvas, spec, gridWidth, gridHeight, result) {
+    const page = this;
+    const pack = (filePath, current) => ({
+      path: filePath,
+      previewPath: filePath,
+      patternPixelW: current.canvasW,
+      patternPixelH: current.canvasH,
+      palette: result.palette,
+      totalBeads: result.totalBeads,
+      emptyCount: result.emptyCount
+    });
+    return page.paintCanvas(canvas, spec, gridWidth, gridHeight, result, true)
+      .then(() => page.saveCanvasPng(canvas, false))
+      .then((filePath) => pack(filePath, spec))
+      .catch(() => {
+        const cell = Math.max(4, Math.min(16, Math.floor(320 / Math.max(gridWidth, gridHeight))));
+        const compact = {
+          cell,
+          patternW: gridWidth * cell,
+          patternH: gridHeight * cell,
+          canvasW: gridWidth * cell,
+          canvasH: spec.headerH + gridHeight * cell,
+          headerH: spec.headerH,
+          legendH: 0,
+          legendTitleH: spec.legendTitleH,
+          rowH: spec.rowH,
+          cols: 1
+        };
+        return page.paintCanvas(canvas, compact, gridWidth, gridHeight, result, false)
+          .then(() => page.saveCanvasPng(canvas, true))
+          .then((filePath) => pack(filePath, compact));
+      });
+  },
+
+  paintCanvas(canvas, spec, gridWidth, gridHeight, result, withLegend) {
+    canvas.width = spec.canvasW;
+    canvas.height = spec.canvasH;
+    const outCtx = canvas.getContext('2d');
+    drawPattern(outCtx, spec, gridWidth, gridHeight, result, withLegend);
+    return Promise.resolve();
+  },
+
+  saveCanvasPng(canvas, allowTempFile) {
+    const base64 = this.canvasPngBase64(canvas);
+    if (base64) return this.writeBase64Png(base64);
+    if (allowTempFile) return this.exportCanvasPlain(canvas);
+    return Promise.reject(new Error('EXPORT'));
+  },
+
+  canvasPngBase64(canvas) {
+    if (typeof canvas.toDataURL !== 'function') return '';
+    try {
+      const dataUrl = canvas.toDataURL('image/png');
+      if (!dataUrl) return '';
+      const comma = dataUrl.indexOf(',');
+      return comma >= 0 ? dataUrl.slice(comma + 1) : dataUrl;
+    } catch (err) {
+      console.error('toDataURL failed', err);
+      return '';
+    }
+  },
+
+  writeBase64Png(base64) {
+    const page = this;
+    const filePath = `${wx.env.USER_DATA_PATH}/pindou-${Date.now()}.png`;
+    return new Promise((resolve, reject) => {
+      wx.getFileSystemManager().writeFile({
+        filePath,
+        data: base64,
+        encoding: 'base64',
+        success: () => {
+          if (page._patternFile && page._patternFile !== filePath) {
+            wx.getFileSystemManager().unlink({ filePath: page._patternFile, fail() {} });
+          }
+          page._patternFile = filePath;
+          resolve(filePath);
+        },
+        fail: reject
       });
     });
   },
 
+  exportCanvasPlain(canvas) {
+    return new Promise((resolve, reject) => {
+      wx.canvasToTempFilePath({
+        canvas,
+        fileType: 'png',
+        success: (res) => resolve(res.tempFilePath),
+        fail: reject
+      }, this);
+    });
+  },
+
+  layoutPreview(attempt) {
+    const page = this;
+    wx.nextTick(() => {
+      wx.createSelectorQuery().in(page).select('.pattern-viewport').boundingClientRect((rect) => {
+        if ((!rect || !rect.width) && attempt < 2) {
+          page.layoutPreview(attempt + 1);
+          return;
+        }
+        if (!rect || !rect.width || !page.data.patternPixelW) return;
+        const windowInfo = typeof wx.getWindowInfo === 'function' ? wx.getWindowInfo() : { windowHeight: 700 };
+        const areaH = Math.max(280, Math.min(Math.round(windowInfo.windowHeight * 0.58), 640));
+        const fit = fitPreview(rect.width, areaH, page.data.patternPixelW, page.data.patternPixelH);
+        const grid = Number(page.data.gridWidth) || 1;
+        const cellAtFit = fit.baseW / grid;
+        const maxScale = Math.max(3, Math.min(12, 36 / Math.max(cellAtFit, 1)));
+        page._preview = {
+          areaW: rect.width,
+          areaH,
+          baseW: fit.baseW,
+          baseH: fit.baseH,
+          maxScale
+        };
+        page._previewRect = { left: rect.left, top: rect.top };
+        page.setData({
+          previewAreaH: areaH,
+          previewBaseW: fit.baseW,
+          previewBaseH: fit.baseH,
+          previewTx: fit.tx,
+          previewTy: fit.ty,
+          previewScale: 1,
+          previewScaleText: '100%'
+        });
+      }).exec();
+    });
+  },
+
+  setPreviewScale(nextScale) {
+    const box = this._preview;
+    if (!box) return;
+    const prev = this.data.previewScale || 1;
+    const scale = Math.max(1, Math.min(box.maxScale, nextScale));
+    const cx = box.areaW / 2;
+    const cy = box.areaH / 2;
+    const ix = (cx - this.data.previewTx) / prev;
+    const iy = (cy - this.data.previewTy) / prev;
+    const pan = clampPreviewPan(
+      cx - ix * scale,
+      cy - iy * scale,
+      box.areaW,
+      box.areaH,
+      box.baseW * scale,
+      box.baseH * scale
+    );
+    this.setData({
+      previewScale: Math.round(scale * 100) / 100,
+      previewTx: Math.round(pan.tx),
+      previewTy: Math.round(pan.ty),
+      previewScaleText: Math.round(scale * 100) + '%'
+    });
+  },
+
+  previewZoomIn() {
+    this.setPreviewScale((this.data.previewScale || 1) * 1.4);
+  },
+
+  previewZoomOut() {
+    this.setPreviewScale((this.data.previewScale || 1) / 1.4);
+  },
+
+  previewFit() {
+    this.setPreviewScale(1);
+  },
+
+  previewReadNumbers() {
+    const box = this._preview;
+    if (!box) return;
+    const grid = Number(this.data.gridWidth) || 1;
+    this.setPreviewScale(28 / (box.baseW / grid));
+  },
+
+  onPreviewTouchStart(e) {
+    const touches = e.touches || [];
+    if (!touches.length) return;
+    this._gesture = {
+      scale: this.data.previewScale || 1,
+      tx: this.data.previewTx,
+      ty: this.data.previewTy,
+      x0: touches[0].clientX,
+      y0: touches[0].clientY,
+      dist: touches.length > 1 ? this.touchDistance(touches[0], touches[1]) : 0,
+      midX: touches.length > 1 ? (touches[0].clientX + touches[1].clientX) / 2 : 0,
+      midY: touches.length > 1 ? (touches[0].clientY + touches[1].clientY) / 2 : 0
+    };
+    wx.createSelectorQuery().in(this).select('.pattern-viewport').boundingClientRect((rect) => {
+      if (rect) this._previewRect = { left: rect.left, top: rect.top };
+    }).exec();
+  },
+
+  onPreviewTouchMove(e) {
+    const gesture = this._gesture;
+    const box = this._preview;
+    const rect = this._previewRect;
+    const touches = e.touches || [];
+    if (!gesture || !box || !rect || !touches.length) return;
+    if (touches.length >= 2 && gesture.dist) {
+      const distNow = this.touchDistance(touches[0], touches[1]);
+      const scale = Math.max(1, Math.min(box.maxScale, gesture.scale * (distNow / gesture.dist)));
+      const ix = (gesture.midX - rect.left - gesture.tx) / gesture.scale;
+      const iy = (gesture.midY - rect.top - gesture.ty) / gesture.scale;
+      const midX = (touches[0].clientX + touches[1].clientX) / 2 - rect.left;
+      const midY = (touches[0].clientY + touches[1].clientY) / 2 - rect.top;
+      const pan = clampPreviewPan(
+        midX - ix * scale,
+        midY - iy * scale,
+        box.areaW,
+        box.areaH,
+        box.baseW * scale,
+        box.baseH * scale
+      );
+      this.setData({
+        previewScale: Math.round(scale * 100) / 100,
+        previewTx: Math.round(pan.tx),
+        previewTy: Math.round(pan.ty),
+        previewScaleText: Math.round(scale * 100) + '%'
+      });
+      return;
+    }
+    const viewW = box.baseW * gesture.scale;
+    const viewH = box.baseH * gesture.scale;
+    const pan = clampPreviewPan(
+      gesture.tx + touches[0].clientX - gesture.x0,
+      gesture.ty + touches[0].clientY - gesture.y0,
+      box.areaW,
+      box.areaH,
+      viewW,
+      viewH
+    );
+    this.setData({
+      previewTx: Math.round(pan.tx),
+      previewTy: Math.round(pan.ty)
+    });
+  },
+
+  onPreviewTouchEnd(e) {
+    if (e.touches && e.touches.length) {
+      this.onPreviewTouchStart(e);
+      return;
+    }
+    this._gesture = null;
+  },
+
+  touchDistance(a, b) {
+    const dx = a.clientX - b.clientX;
+    const dy = a.clientY - b.clientY;
+    return Math.sqrt(dx * dx + dy * dy) || 1;
+  },
+
   savePattern() {
     if (!this.data.patternPath || this.data.exporting) return;
-    this.ensurePrivacy()
-      .then(() => this.writeAlbum())
-      .catch(() => {
-        wx.showToast({ title: '需同意隐私指引后才能保存', icon: 'none' });
-      });
+    this.writeAlbum();
   },
 
   writeAlbum() {
@@ -458,8 +729,12 @@ Page({
       success: () => wx.showToast({ title: '已保存到相册', icon: 'success' }),
       fail: (err) => {
         const msg = (err && err.errMsg) || '';
+        if ((err && err.errno === 112) || msg.indexOf('not declared') >= 0) {
+          this.showPrivacyScopeError('save');
+          return;
+        }
         if (msg.indexOf('privacy') >= 0) {
-          wx.showToast({ title: '需同意隐私指引后才能保存', icon: 'none' });
+          wx.showToast({ title: '需先同意隐私保护指引', icon: 'none' });
           return;
         }
         if (msg.indexOf('auth deny') >= 0 || msg.indexOf('auth denied') >= 0) {
@@ -506,6 +781,17 @@ Page({
     if (typeof resolve === 'function') resolve({ event: 'disagree' });
   },
 
+  showPrivacyScopeError(kind) {
+    const content = kind === 'save'
+      ? '请到微信公众平台 → 设置 → 用户隐私保护指引，勾选「相册（仅写入）」，用途填写保存拼豆图纸。保存后约 5 分钟生效，再重新编译。'
+      : '请到微信公众平台 → 设置 → 用户隐私保护指引，勾选「收集你选中的照片或视频信息」，用途填写把照片转成拼豆图纸。若要拍摄，再勾选「访问你的摄像头」。保存后约 5 分钟生效，再重新编译。';
+    wx.showModal({
+      title: '隐私指引还没声明这项',
+      content,
+      showCancel: false
+    });
+  },
+
   handleOpenPrivacyContract() {
     if (typeof wx.openPrivacyContract !== 'function') {
       wx.showToast({ title: '当前基础库无法打开隐私指引', icon: 'none' });
@@ -513,19 +799,6 @@ Page({
     }
     wx.openPrivacyContract({
       fail: () => wx.showToast({ title: '请先在小程序后台配置隐私保护指引', icon: 'none' })
-    });
-  },
-
-  ensurePrivacy() {
-    return new Promise((resolve, reject) => {
-      if (typeof wx.requirePrivacyAuthorize !== 'function') {
-        resolve();
-        return;
-      }
-      wx.requirePrivacyAuthorize({
-        success: () => resolve(),
-        fail: () => reject(new Error('PRIVACY_DECLINED'))
-      });
     });
   }
 });

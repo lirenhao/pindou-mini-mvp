@@ -13,6 +13,7 @@
 .crop-frame { position: relative; overflow: hidden; border-radius: 16rpx; background: #2a241f; }
 .crop-image { position: absolute; }
 .empty-image { height: 240rpx; background: #fbf7f3; border: 2rpx dashed #e8d9ce; border-radius: 16rpx; display: flex; flex-direction: column; align-items: center; justify-content: center; color: #9d9188; font-size: 25rpx; }
+.empty-image-hover { background: #f3ebe4; }
 .empty-icon { font-size: 58rpx; color: #d96f4a; line-height: 1.2; margin-bottom: 12rpx; }
 .slider-label { display: flex; justify-content: space-between; align-items: center; margin-top: 20rpx; font-size: 24rpx; color: #8b8179; }
 .reset { color: #d96f4a; font-weight: 650; }
@@ -30,8 +31,12 @@
 .summary view { display: flex; flex-direction: column; gap: 8rpx; }
 .metric { font-size: 32rpx; font-weight: 800; color: #c95f3b; }
 .metric-label { font-size: 21rpx; color: #95877d; }
-.pattern-scroll { width: 100%; height: 720rpx; margin-top: 16rpx; background: #fffaf5; border-radius: 10rpx; }
-.pattern-image { display: block; }
+.preview-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12rpx; margin-top: 16rpx; }
+.preview-actions { display: flex; flex-wrap: wrap; gap: 12rpx; }
+.preview-btn { padding: 8rpx 18rpx; background: #fff7f1; color: #c95f3b; border-radius: 999rpx; font-size: 22rpx; font-weight: 650; }
+.preview-scale { flex: none; font-size: 22rpx; color: #9a8f86; }
+.pattern-viewport { position: relative; width: 100%; margin-top: 16rpx; overflow: hidden; background: #f6f1ec; border-radius: 12rpx; }
+.pattern-image { position: absolute; left: 0; top: 0; }
 .export { margin-top: 24rpx; }
 .color-head { display: flex; align-items: center; color: #9a8f86; font-size: 22rpx; padding: 0 4rpx 12rpx; border-bottom: 1rpx solid #f0e8e2; }
 .head-index { width: 120rpx; }
@@ -45,7 +50,8 @@
 .rgb { font-size: 21rpx; color: #9a8f86; }
 .count { width: 110rpx; text-align: right; font-size: 25rpx; font-weight: 650; }
 .footer { text-align: center; color: #b1a69d; font-size: 21rpx; padding: 12rpx 0; }
-.hidden-canvas { position: fixed; left: -2000px; top: -2000px; width: 2px; height: 2px; opacity: 0; }
+.canvas-clip { position: fixed; left: 0; top: 0; width: 1px; height: 1px; overflow: hidden; opacity: 0; }
+.work-canvas { position: absolute; left: 0; top: 0; }
 .privacy-mask { position: fixed; left: 0; top: 0; right: 0; bottom: 0; z-index: 20; background: rgba(46, 41, 37, 0.45); display: flex; align-items: center; justify-content: center; padding: 48rpx; }
 .privacy-card { width: 100%; background: #fff; border-radius: 24rpx; padding: 36rpx 32rpx 28rpx; }
 .privacy-title { font-size: 34rpx; font-weight: 750; }

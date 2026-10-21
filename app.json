@@ -10,6 +10,9 @@
   },
   "__usePrivacyCheck__": true,
   "permission": {
+    "scope.chooseMedia": {
+      "desc": "用于生成拼豆图纸"
+    },
     "scope.writePhotosAlbum": {
       "desc": "用于把拼豆图纸保存到相册"
     }

@@ -270,14 +270,49 @@ function buildBeadPattern({ pixels, width, height, colorLimit, dither, brandColo
   };
 }
 
-function cellSizeForGrid(width, height) {
-  const longest = Math.max(width, height);
-  const fitted = Math.floor(1800 / longest);
-  return Math.max(18, Math.min(28, fitted));
+const MAX_EXPORT_SIDE = 2048;
+const MAX_EXPORT_PIXELS = 1365 * 1365;
+
+function exceedsExportLimit(width, height) {
+  return width > MAX_EXPORT_SIDE || height > MAX_EXPORT_SIDE || width * height > MAX_EXPORT_PIXELS;
 }
 
-function patternCanvasSize(gridWidth, gridHeight, paletteLength) {
-  const cell = cellSizeForGrid(gridWidth, gridHeight);
+function fitExportSize(width, height) {
+  const sideScale = Math.min(1, MAX_EXPORT_SIDE / width, MAX_EXPORT_SIDE / height);
+  const pixelScale = Math.min(1, Math.sqrt(MAX_EXPORT_PIXELS / (width * height)));
+  const scale = Math.min(sideScale, pixelScale);
+  return {
+    destWidth: Math.max(1, Math.floor(width * scale)),
+    destHeight: Math.max(1, Math.floor(height * scale))
+  };
+}
+
+function fitPreview(areaW, areaH, patternW, patternH) {
+  const scale = Math.min(areaW / patternW, areaH / patternH);
+  const baseW = Math.max(1, Math.round(patternW * scale));
+  const baseH = Math.max(1, Math.round(patternH * scale));
+  return {
+    baseW,
+    baseH,
+    tx: Math.round((areaW - baseW) / 2),
+    ty: Math.round((areaH - baseH) / 2)
+  };
+}
+
+function clampPreviewPan(tx, ty, areaW, areaH, viewW, viewH) {
+  const xRange = viewW <= areaW
+    ? [(areaW - viewW) / 2, (areaW - viewW) / 2]
+    : [areaW - viewW, 0];
+  const yRange = viewH <= areaH
+    ? [(areaH - viewH) / 2, (areaH - viewH) / 2]
+    : [areaH - viewH, 0];
+  return {
+    tx: Math.min(xRange[1], Math.max(xRange[0], tx)),
+    ty: Math.min(yRange[1], Math.max(yRange[0], ty))
+  };
+}
+
+function layoutPatternCanvas(gridWidth, gridHeight, paletteLength, cell) {
   const patternW = gridWidth * cell;
   const patternH = gridHeight * cell;
   const canvasW = Math.max(patternW, 420);
@@ -301,13 +336,27 @@ function patternCanvasSize(gridWidth, gridHeight, paletteLength) {
   };
 }
 
+function patternCanvasSize(gridWidth, gridHeight, paletteLength) {
+  const longest = Math.max(gridWidth, gridHeight);
+  let cell = Math.max(8, Math.min(28, Math.floor(1200 / longest)));
+  let spec = layoutPatternCanvas(gridWidth, gridHeight, paletteLength, cell);
+  while (cell > 8 && exceedsExportLimit(spec.canvasW, spec.canvasH)) {
+    cell -= 1;
+    spec = layoutPatternCanvas(gridWidth, gridHeight, paletteLength, cell);
+  }
+  return spec;
+}
+
 module.exports = {
   buildBeadPattern,
   sourceCrop,
   coverFrame,
   coverPlacement,
-  cellSizeForGrid,
+  fitPreview,
+  clampPreviewPan,
   patternCanvasSize,
+  fitExportSize,
+  exceedsExportLimit,
   colorDistanceSq,
   rgbToHex
 };

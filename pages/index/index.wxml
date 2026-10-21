@@ -43,7 +43,10 @@
       />
       <view class="hint">框内是实际入图范围。拖动调整位置，滑杆放大。宽高比跟图纸格子一致。</view>
     </block>
-    <view wx:else class="empty-image"><text class="empty-icon">＋</text><text>选择一张清晰、主体明显的图片</text></view>
+    <view wx:else class="empty-image" hover-class="empty-image-hover" bindtap="chooseImage">
+      <text class="empty-icon">＋</text>
+      <text>点这里选择一张清晰、主体明显的图片</text>
+    </view>
   </view>
 
   <view class="panel">
@@ -82,12 +85,31 @@
     </view>
     <view wx:if="{{emptyCount}}" class="hint">透明区域留空 {{emptyCount}} 格，不计入豆子。</view>
     <view wx:if="{{patternStale}}" class="hint warn">裁切或参数已变更，重新生成后才会更新图纸。</view>
-    <scroll-view class="pattern-scroll" scroll-x scroll-y enhanced show-scrollbar>
-      <view style="width: {{patternDisplayWidth}}px;">
-        <image class="pattern-image" src="{{patternPath}}" mode="widthFix" style="width: {{patternDisplayWidth}}px;" show-menu-by-longpress="true" />
+    <view class="preview-toolbar">
+      <view class="preview-actions">
+        <text class="preview-btn" bindtap="previewZoomOut">缩小</text>
+        <text class="preview-btn" bindtap="previewZoomIn">放大</text>
+        <text class="preview-btn" bindtap="previewReadNumbers">看编号</text>
+        <text class="preview-btn" bindtap="previewFit">整图</text>
       </view>
-    </scroll-view>
-    <view class="hint">格子里的数字对应下方编号。预览可滑动，导出的 PNG 自带色号表。</view>
+      <text class="preview-scale">{{previewScaleText}}</text>
+    </view>
+    <view
+      class="pattern-viewport"
+      style="height: {{previewAreaH}}px;"
+      bindtouchstart="onPreviewTouchStart"
+      catchtouchmove="onPreviewTouchMove"
+      bindtouchend="onPreviewTouchEnd"
+      bindtouchcancel="onPreviewTouchEnd"
+    >
+      <view
+        class="pattern-image"
+        style="width: {{previewBaseW}}px; height: {{previewBaseH}}px; transform: translate3d({{previewTx}}px, {{previewTy}}px, 0) scale({{previewScale}}); transform-origin: 0 0;"
+      >
+        <image src="{{previewPath}}" mode="scaleToFill" show-menu-by-longpress="true" style="width: 100%; height: 100%;" />
+      </view>
+    </view>
+    <view class="hint">先看整张。双指或点「看编号」放大，单指拖动。粗线每 10 格一条。导出的 PNG 含色号表。</view>
     <button class="primary export" bindtap="savePattern" loading="{{exporting}}">导出 / 保存 PNG</button>
   </view>
 
@@ -105,7 +127,9 @@
 
   <view class="footer">本地处理 · MARD 291 参考色 · 不上传图片</view>
 
-  <canvas type="2d" id="workCanvas" class="hidden-canvas"></canvas>
+  <view class="canvas-clip" wx:if="{{useCanvas}}">
+    <canvas type="2d" id="workCanvas" class="work-canvas" style="width: {{canvasCssW}}px; height: {{canvasCssH}}px;"></canvas>
+  </view>
 </view>
 
 <view wx:if="{{showPrivacy}}" class="privacy-mask">
