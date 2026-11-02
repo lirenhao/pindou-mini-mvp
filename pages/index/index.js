@@ -185,6 +185,37 @@ Page({
     canvasCssH: 300
   },
 
+  onLoad() {
+    if (typeof wx.showShareMenu === 'function') {
+      wx.showShareMenu({
+        menus: ['shareAppMessage', 'shareTimeline']
+      });
+    }
+  },
+
+  onShareAppMessage() {
+    return this.sharePayload();
+  },
+
+  onShareTimeline() {
+    const payload = this.sharePayload();
+    const share = { title: payload.title, query: '' };
+    if (payload.imageUrl) share.imageUrl = payload.imageUrl;
+    return share;
+  },
+
+  sharePayload() {
+    const ready = this.data.patternReady && this.data.gridWidth && this.data.gridHeight;
+    const payload = {
+      title: ready
+        ? '拼豆图纸 ' + this.data.gridWidth + '×' + this.data.gridHeight
+        : '图片转拼豆图纸',
+      path: '/pages/index/index'
+    };
+    if (this.data.patternPath) payload.imageUrl = this.data.patternPath;
+    return payload;
+  },
+
   onWidthInput(e) {
     const value = e.detail.value;
     this.updateParam({ gridWidth: value }, () => {
