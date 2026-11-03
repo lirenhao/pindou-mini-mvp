@@ -29,6 +29,7 @@
     }
   },
   "compileType": "miniprogram",
+  "cloudfunctionRoot": "cloudfunctions/",
   "libVersion": "3.6.5",
   "appid": "wx7ae0434918075072",
   "projectname": "pindou-mini-mvp",

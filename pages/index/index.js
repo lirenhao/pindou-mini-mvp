@@ -1,5 +1,6 @@
 const { MARD_COLORS, MARD_PALETTE_NAME } = require('../../utils/mard-palette.js');
 const { buildBeadPattern, sourceCrop, coverFrame, coverPlacement, patternCanvasSize, fitPreview, clampPreviewPan } = require('../../utils/pattern.js');
+const { checkImage, checkText } = require('../../utils/security.js');
 
 const MAX_DIMENSION = 100;
 
@@ -268,29 +269,51 @@ Page({
       success(res) {
         const file = res.tempFiles && res.tempFiles[0];
         if (!file || !file.tempFilePath) return;
-        wx.getImageInfo({
-          src: file.tempFilePath,
-          success(info) {
-            page.setData({
-              imagePath: file.tempFilePath,
-              imageWidth: info.width,
-              imageHeight: info.height,
-              panX: 0.5,
-              panY: 0.5,
-              zoom: 1,
-              zoomText: '1.0',
-              patternReady: false,
-              patternStale: false,
-              patternPath: '',
-              previewPath: '',
-              palette: [],
-              totalBeads: 0,
-              emptyCount: 0
-            }, () => page.measureCrop());
-          },
-          fail() {
-            wx.showToast({ title: '未能读取图片', icon: 'none' });
+        wx.showLoading({ title: '正在检测图片', mask: true });
+        checkImage(file.tempFilePath).then((pass) => {
+          wx.hideLoading();
+          if (!pass) {
+            wx.showModal({
+              title: '无法使用这张图片',
+              content: '图片未通过内容安全检测，请换一张。',
+              showCancel: false
+            });
+            return;
           }
+          wx.getImageInfo({
+            src: file.tempFilePath,
+            success(info) {
+              page.setData({
+                imagePath: file.tempFilePath,
+                imageWidth: info.width,
+                imageHeight: info.height,
+                panX: 0.5,
+                panY: 0.5,
+                zoom: 1,
+                zoomText: '1.0',
+                patternReady: false,
+                patternStale: false,
+                patternPath: '',
+                previewPath: '',
+                palette: [],
+                totalBeads: 0,
+                emptyCount: 0
+              }, () => page.measureCrop());
+            },
+            fail() {
+              wx.showToast({ title: '未能读取图片', icon: 'none' });
+            }
+          });
+        }).catch((err) => {
+          wx.hideLoading();
+          const tooLarge = err && err.message === 'IMAGE_TOO_LARGE';
+          wx.showModal({
+            title: '内容安全检测失败',
+            content: tooLarge
+              ? '图片仍然超过 1MB，请换一张更小的图片。'
+              : '暂时无法完成图片安全检测。请确认已开通云开发，并上传部署 imgSecCheck 云函数后再试。',
+            showCancel: false
+          });
         });
       },
       fail(err) {
@@ -391,6 +414,28 @@ Page({
     const width = clampInt(this.data.gridWidth, 29, 5, MAX_DIMENSION);
     const height = clampInt(this.data.gridHeight, 29, 5, MAX_DIMENSION);
     const colorLimit = clampInt(this.data.colorLimit, 12, 2, 32);
+    const text = [this.data.gridWidth, this.data.gridHeight, this.data.colorLimit].join(' ');
+    wx.showLoading({ title: '正在检测内容', mask: true });
+    try {
+      const textPass = await checkText(text);
+      wx.hideLoading();
+      if (!textPass) {
+        wx.showModal({
+          title: '无法生成',
+          content: '填写内容未通过内容安全检测，请修改后再试。',
+          showCancel: false
+        });
+        return;
+      }
+    } catch (err) {
+      wx.hideLoading();
+      wx.showModal({
+        title: '内容安全检测失败',
+        content: '暂时无法完成文本安全检测。请确认已开通云开发，并上传部署 msgSecCheck 云函数后再试。',
+        showCancel: false
+      });
+      return;
+    }
     this.setData({
       gridWidth: String(width),
       gridHeight: String(height),

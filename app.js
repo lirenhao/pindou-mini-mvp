@@ -1,5 +1,8 @@
 App({
   onLaunch() {
+    if (wx.cloud) {
+      wx.cloud.init({ traceUser: true });
+    }
     if (typeof wx.onNeedPrivacyAuthorization !== 'function') return;
     wx.onNeedPrivacyAuthorization((resolve) => {
       const pages = getCurrentPages();
